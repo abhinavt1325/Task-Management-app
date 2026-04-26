@@ -6,7 +6,7 @@ import './Auth.css';
 
 export default function Register() {
   const [formData, setFormData] = useState({
-    full_name: '',
+    name: '',
     username: '',
     email: '',
     password: ''
@@ -30,7 +30,12 @@ export default function Register() {
       await api.post('/user/register', formData);
       navigate('/login');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to register. Please try again.');
+      const detail = err.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        setError(detail.map((d) => d.msg).join(', '));
+      } else {
+        setError(detail || 'Failed to register. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -43,15 +48,15 @@ export default function Register() {
 
     <form onSubmit={handleRegister} className="auth-form">
       <div className="input-group">
-        <label htmlFor="full_name">Full Name</label>
+        <label htmlFor="name">Full Name</label>
         <div className="input-wrapper">
           <User className="input-icon" size={20} />
           <input
-            id="full_name"
+            id="name"
             type="text"
             className="auth-input"
             placeholder="John Doe"
-            value={formData.full_name}
+            value={formData.name}
             onChange={handleChange}
             required
           />
