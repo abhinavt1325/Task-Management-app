@@ -21,13 +21,13 @@ def get_tasks(db: Session, user: UserModel):
     return tasks
 
 def get_one_task(task_id:int, db: Session):
-    one_task=db.query(TaskModel).get(task_id)
+    one_task=db.get(TaskModel, task_id)
     if not one_task:
         raise HTTPException(status_code=404, detail="Task not found for this ID!")
     return one_task
 
 def update_task(task_id:int, body: TaskSchema, db: Session, user: UserModel):
-    one_task:TaskModel = db.query(TaskModel).get(task_id)
+    one_task:TaskModel = db.get(TaskModel, task_id)
     if not one_task:
         raise HTTPException(status_code=404, detail="Task not found for this ID!")
     if one_task.user_id!=user.id:
@@ -43,7 +43,7 @@ def update_task(task_id:int, body: TaskSchema, db: Session, user: UserModel):
     return one_task
 
 def delete_task(task_id:int, db: Session, user:UserModel):
-    one_task:TaskModel = db.query(TaskModel).get(task_id)
+    one_task:TaskModel = db.get(TaskModel, task_id)
     if not one_task:
         raise HTTPException(status_code=404, detail="Task not found for this ID!")
     if one_task.user_id!=user.id:
