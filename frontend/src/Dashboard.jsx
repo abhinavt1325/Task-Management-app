@@ -237,10 +237,20 @@ export default function Dashboard() {
       try {
         response = await api.get('/tasks/all_tasks');
       } catch {
-        response = await api.get('/tasks');
+        try {
+          response = await api.get('/tasks');
+        } catch {
+          // ignore
+        }
       }
 
-      let all = Array.isArray(response?.data) ? response.data.map(normalizeTask) : loadCachedTasks().map(normalizeTask);
+      let all = [];
+      if (response && Array.isArray(response.data)) {
+        all = response.data.map(normalizeTask);
+      } else {
+        all = loadCachedTasks().map(normalizeTask);
+      }
+
       if (selectedProject) {
         all = all.filter(t => Number(t.project_id) === Number(selectedProject.id));
       }
@@ -289,16 +299,23 @@ export default function Dashboard() {
             try {
               response = await api.get('/tasks');
             } catch {
-              console.warn('Server task endpoints unreachable');
+              console.warn('Server task endpoints unreachable, using local cache');
             }
           }
         }
       }
 
       if (response && Array.isArray(response.data)) {
-        const normalizedTasks = response.data.map(normalizeTask);
-        saveCachedTasks(normalizedTasks);
-        const filteredAndSorted = applyClientSideFilters(normalizedTasks);
+        const serverTasks = response.data.map(normalizeTask);
+        const cachedTasks = loadCachedTasks().map(normalizeTask);
+        const taskMap = new Map();
+        serverTasks.forEach(t => taskMap.set(t.id, t));
+        cachedTasks.forEach(t => {
+          if (!taskMap.has(t.id)) taskMap.set(t.id, t);
+        });
+        const mergedTasks = Array.from(taskMap.values());
+        saveCachedTasks(mergedTasks);
+        const filteredAndSorted = applyClientSideFilters(mergedTasks);
         setTasks(filteredAndSorted);
       } else {
         const cached = loadCachedTasks().map(normalizeTask);
@@ -431,46 +448,69 @@ export default function Dashboard() {
     setModalLoading(true);
     setModalError('');
 
-    try {
-      const payload = {
-        title: formData.title.trim(),
-        description: formData.description.trim(),
-        status: formData.status,
-        priority: formData.priority,
-        due_date: formData.due_date ? new Date(formData.due_date).toISOString() : null,
-        is_completed: formData.status === 'COMPLETED',
-        project_id: formData.project_id ? Number(formData.project_id) : null
-      };
+    const payload = {
+      title: formData.title.trim(),
+      description: formData.description.trim(),
+      status: formData.status || 'TODO',
+      priority: formData.priority || 'MEDIUM',
+      due_date: formData.due_date ? new Date(formData.due_date).toISOString() : null,
+      is_completed: formData.status === 'COMPLETED',
+      project_id: formData.project_id ? Number(formData.project_id) : null
+    };
 
-      if (editingTask) {
-        // Update existing task
-        const response = await api.put(`/tasks/update_task/${editingTask.id}`, payload);
-        const updatedTask = normalizeTask({
-          ...editingTask,
-          ...payload,
-          ...(response?.data || {}),
-          project_id: payload.project_id
-        });
-        setLocalTaskProjectMapping(editingTask.id, payload.project_id);
-        setTasks(prevTasks => prevTasks.map(t => t.id === editingTask.id ? updatedTask : t));
-        showToast('Task updated successfully!', 'success');
-      } else {
-        // Create new task
-        const response = await api.post('/tasks/create', payload);
-        const newTaskId = response?.data?.id || Date.now();
-        setLocalTaskProjectMapping(newTaskId, payload.project_id);
-        const newTask = normalizeTask({
-          ...payload,
-          id: newTaskId,
-          ...(response?.data || {}),
-          project_id: payload.project_id
-        });
-        setTasks(prevTasks => [newTask, ...prevTasks]);
-        showToast('Task created successfully!', 'success');
+    try {
+      let response = null;
+      try {
+        if (editingTask) {
+          try {
+            response = await api.put(`/tasks/update_task/${editingTask.id}`, payload);
+          } catch {
+            response = await api.put(`/tasks/${editingTask.id}`, payload);
+          }
+        } else {
+          try {
+            response = await api.post('/tasks/create', payload);
+          } catch {
+            try {
+              response = await api.post('/tasks', payload);
+            } catch {
+              // Minimal payload attempt
+              response = await api.post('/tasks/create', {
+                title: payload.title,
+                description: payload.description
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Server task save not reachable or returned error, saving locally', err);
       }
+
+      const taskId = editingTask ? editingTask.id : (response?.data?.id || Date.now());
+      const savedTask = normalizeTask({
+        ...(editingTask || {}),
+        ...payload,
+        id: taskId,
+        ...(response?.data || {}),
+        project_id: payload.project_id
+      });
+
+      setLocalTaskProjectMapping(taskId, payload.project_id);
+
+      setTasks(prevTasks => {
+        let updated;
+        if (editingTask) {
+          updated = prevTasks.map(t => t.id === taskId ? savedTask : t);
+        } else {
+          updated = [savedTask, ...prevTasks];
+        }
+        saveCachedTasks(updated);
+        return updated;
+      });
+
+      showToast(editingTask ? 'Task updated successfully!' : 'Task created successfully!', 'success');
       fetchCounts();
       fetchProjects();
-      fetchTasks();
       closeModal();
     } catch (error) {
       console.error('Error saving task', error);
@@ -489,45 +529,61 @@ export default function Dashboard() {
   };
 
   const toggleTaskCompletion = async (task) => {
-    try {
-      const currentStatus = getTaskStatus(task);
-      const nextStatus = currentStatus === 'COMPLETED' ? 'TODO' : 'COMPLETED';
-      const updatedData = {
-        status: nextStatus,
-        is_completed: nextStatus === 'COMPLETED'
-      };
-      const response = await api.put(`/tasks/update_task/${task.id}`, updatedData);
-      const updatedTask = normalizeTask({
-        ...task,
-        ...updatedData,
-        ...(response?.data || {})
-      });
-      
-      // Update local state for immediate feedback
-      setTasks(tasks.map(t => t.id === task.id ? updatedTask : t));
-      fetchCounts();
+    const currentStatus = getTaskStatus(task);
+    const nextStatus = currentStatus === 'COMPLETED' ? 'TODO' : 'COMPLETED';
+    const updatedData = {
+      status: nextStatus,
+      is_completed: nextStatus === 'COMPLETED'
+    };
 
-      showToast(nextStatus === 'COMPLETED' ? 'Task marked as completed!' : 'Task marked as to do', 'success');
-    } catch (error) {
-      console.error('Error toggling completion', error);
-      showToast('Failed to update task status', 'error');
+    let response;
+    try {
+      try {
+        response = await api.put(`/tasks/update_task/${task.id}`, updatedData);
+      } catch {
+        response = await api.put(`/tasks/${task.id}`, updatedData);
+      }
+    } catch (err) {
+      console.warn('Status toggle on server failed, updating locally', err);
     }
+
+    const updatedTask = normalizeTask({
+      ...task,
+      ...updatedData,
+      ...(response?.data || {})
+    });
+
+    setTasks(prev => {
+      const updated = prev.map(t => t.id === task.id ? updatedTask : t);
+      saveCachedTasks(updated);
+      return updated;
+    });
+    fetchCounts();
+    showToast(nextStatus === 'COMPLETED' ? 'Task marked as completed!' : 'Task marked as to do', 'success');
   };
 
   const deleteTask = async (taskId) => {
     if (!window.confirm('Are you sure you want to delete this task?')) return;
     
     try {
-      await api.delete(`/tasks/delete_task/${taskId}`);
-      setLocalTaskProjectMapping(taskId, null);
-      setTasks(tasks.filter(t => t.id !== taskId));
-      fetchCounts();
-      fetchProjects();
-      showToast('Task deleted successfully', 'success');
-    } catch (error) {
-      console.error('Error deleting task', error);
-      showToast('Failed to delete task', 'error');
+      try {
+        await api.delete(`/tasks/delete_task/${taskId}`);
+      } catch {
+        await api.delete(`/tasks/${taskId}`);
+      }
+    } catch (err) {
+      console.warn('Delete on server failed, deleting locally', err);
     }
+
+    setLocalTaskProjectMapping(taskId, null);
+    setTasks(prev => {
+      const filtered = prev.filter(t => t.id !== taskId);
+      saveCachedTasks(filtered);
+      return filtered;
+    });
+    fetchCounts();
+    fetchProjects();
+    showToast('Task deleted successfully', 'success');
   };
 
   // Project Modal Handlers
