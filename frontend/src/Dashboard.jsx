@@ -210,18 +210,37 @@ export default function Dashboard() {
     return list;
   };
 
+  // Local storage cache for tasks
+  const getTasksStorageKey = () => `taskflow_cached_tasks_${user?.id || user?.email || 'default'}`;
+
+  const loadCachedTasks = () => {
+    try {
+      const data = localStorage.getItem(getTasksStorageKey());
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveCachedTasks = (taskList) => {
+    try {
+      localStorage.setItem(getTasksStorageKey(), JSON.stringify(taskList));
+    } catch (e) {
+      console.error('Error caching tasks', e);
+    }
+  };
+
   // Fetch all tasks count summary
   const fetchCounts = async () => {
     try {
       let response;
-      const params = {};
-      if (selectedProject) params.project_id = selectedProject.id;
       try {
-        response = await api.get('/tasks/all_tasks', { params });
-      } catch (e) {
-        response = await api.get('/tasks', { params });
+        response = await api.get('/tasks/all_tasks');
+      } catch {
+        response = await api.get('/tasks');
       }
-      let all = Array.isArray(response?.data) ? response.data.map(normalizeTask) : [];
+
+      let all = Array.isArray(response?.data) ? response.data.map(normalizeTask) : loadCachedTasks().map(normalizeTask);
       if (selectedProject) {
         all = all.filter(t => Number(t.project_id) === Number(selectedProject.id));
       }
@@ -232,11 +251,21 @@ export default function Dashboard() {
         COMPLETED: all.filter(t => getTaskStatus(t) === 'COMPLETED').length
       });
     } catch (err) {
-      console.error('Error fetching task counts', err);
+      console.warn('Error fetching task counts, computing from cache', err);
+      let all = loadCachedTasks().map(normalizeTask);
+      if (selectedProject) {
+        all = all.filter(t => Number(t.project_id) === Number(selectedProject.id));
+      }
+      setCounts({
+        ALL: all.length,
+        TODO: all.filter(t => getTaskStatus(t) === 'TODO').length,
+        IN_PROGRESS: all.filter(t => getTaskStatus(t) === 'IN_PROGRESS').length,
+        COMPLETED: all.filter(t => getTaskStatus(t) === 'COMPLETED').length
+      });
     }
   };
 
-  // Fetch tasks with active backend filters & sorting
+  // Fetch tasks with active backend filters & sorting + resilient fallback
   const fetchTasks = async () => {
     setLoading(true);
     try {
@@ -249,17 +278,42 @@ export default function Dashboard() {
 
       let response;
       try {
+        // Attempt 1: Fetch with query params
         response = await api.get('/tasks/all_tasks', { params });
-      } catch (e) {
-        response = await api.get('/tasks', { params });
+      } catch (err1) {
+        try {
+          // Attempt 2: Fetch without query params on /tasks/all_tasks
+          response = await api.get('/tasks/all_tasks');
+        } catch (err2) {
+          try {
+            // Attempt 3: Fetch on /tasks with params
+            response = await api.get('/tasks', { params });
+          } catch (err3) {
+            // Attempt 4: Fetch on plain /tasks
+            response = await api.get('/tasks');
+          }
+        }
       }
 
-      const normalizedTasks = Array.isArray(response?.data) ? response.data.map(normalizeTask) : [];
-      const filteredAndSorted = applyClientSideFilters(normalizedTasks);
-      setTasks(filteredAndSorted);
+      if (response && Array.isArray(response.data)) {
+        const normalizedTasks = response.data.map(normalizeTask);
+        saveCachedTasks(normalizedTasks);
+        const filteredAndSorted = applyClientSideFilters(normalizedTasks);
+        setTasks(filteredAndSorted);
+      } else {
+        // Fallback to cache if server response is not an array
+        const cached = loadCachedTasks().map(normalizeTask);
+        const filteredAndSorted = applyClientSideFilters(cached);
+        setTasks(filteredAndSorted);
+      }
     } catch (error) {
-      console.error('Error fetching tasks', error);
-      showToast('Failed to load tasks', 'error');
+      console.warn('Error fetching tasks from server, loading cached tasks', error);
+      const cached = loadCachedTasks().map(normalizeTask);
+      const filteredAndSorted = applyClientSideFilters(cached);
+      setTasks(filteredAndSorted);
+      if (cached.length === 0) {
+        showToast('Failed to load tasks from server', 'error');
+      }
     } finally {
       setLoading(false);
     }
