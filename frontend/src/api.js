@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Create a configured axios instance to use throughout the app
 const api = axios.create({
-  baseURL: 'https://task-management-app-k18r.onrender.com', // Our FastAPI backend URL
+  baseURL: import.meta.env.VITE_API_URL || 'https://task-management-app-k18r.onrender.com', // Our FastAPI backend URL
 });
 
 // Add a request interceptor to attach the JWT token to every request automatically

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.utils.db import base, engine
 from src.tasks.router import task_routes 
 from src.user.router import user_routes
+from src.projects.router import project_routes
 
 base.metadata.create_all(engine)
 
@@ -21,3 +22,4 @@ app.add_middleware(
 
 app.include_router(task_routes)
 app.include_router(user_routes)
+app.include_router(project_routes)
