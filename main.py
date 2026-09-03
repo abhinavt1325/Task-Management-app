@@ -1,11 +1,32 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.utils.db import base, engine
+from sqlalchemy import text
 from src.tasks.router import task_routes 
 from src.user.router import user_routes
 from src.projects.router import project_routes
 
+# Create any missing tables
 base.metadata.create_all(engine)
+
+# Ensure columns exist on PostgreSQL/SQLite if tables existed beforehand
+try:
+    with engine.connect() as conn:
+        columns = [
+            "ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'TODO';",
+            "ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS priority VARCHAR DEFAULT 'MEDIUM';",
+            "ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS due_date TIMESTAMP WITH TIME ZONE;",
+            "ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS is_completed BOOLEAN DEFAULT FALSE;",
+            "ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS user_id INTEGER;",
+            "ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS project_id INTEGER;"
+        ]
+        for col_sql in columns:
+            try:
+                conn.execute(text(col_sql))
+                conn.commit()
+            except Exception:
+                pass
+except Exception as e:
+    print(f"Database schema auto-migration notice: {e}")
 
 app = FastAPI(title="My Task management application")
 

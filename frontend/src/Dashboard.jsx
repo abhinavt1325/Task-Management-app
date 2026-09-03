@@ -276,21 +276,21 @@ export default function Dashboard() {
       if (sortBy) params.sort_by = sortBy;
       if (selectedProject) params.project_id = selectedProject.id;
 
-      let response;
+      let response = null;
       try {
-        // Attempt 1: Fetch with query params
         response = await api.get('/tasks/all_tasks', { params });
-      } catch (err1) {
+      } catch {
         try {
-          // Attempt 2: Fetch without query params on /tasks/all_tasks
           response = await api.get('/tasks/all_tasks');
-        } catch (err2) {
+        } catch {
           try {
-            // Attempt 3: Fetch on /tasks with params
             response = await api.get('/tasks', { params });
-          } catch (err3) {
-            // Attempt 4: Fetch on plain /tasks
-            response = await api.get('/tasks');
+          } catch {
+            try {
+              response = await api.get('/tasks');
+            } catch {
+              console.warn('Server task endpoints unreachable');
+            }
           }
         }
       }
@@ -301,19 +301,14 @@ export default function Dashboard() {
         const filteredAndSorted = applyClientSideFilters(normalizedTasks);
         setTasks(filteredAndSorted);
       } else {
-        // Fallback to cache if server response is not an array
         const cached = loadCachedTasks().map(normalizeTask);
         const filteredAndSorted = applyClientSideFilters(cached);
         setTasks(filteredAndSorted);
       }
     } catch (error) {
-      console.warn('Error fetching tasks from server, loading cached tasks', error);
+      console.warn('Error during task processing', error);
       const cached = loadCachedTasks().map(normalizeTask);
-      const filteredAndSorted = applyClientSideFilters(cached);
-      setTasks(filteredAndSorted);
-      if (cached.length === 0) {
-        showToast('Failed to load tasks from server', 'error');
-      }
+      setTasks(applyClientSideFilters(cached));
     } finally {
       setLoading(false);
     }
